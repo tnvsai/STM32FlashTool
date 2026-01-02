@@ -34,9 +34,46 @@ namespace STM32Bootloader
             LoadSettings(); // Call LoadSettings AFTER RefreshPorts to restore selection
             
             Closed += (s, e) => SaveSettings();
+            Loaded += OnWindowLoaded;
+        }
+
+        private void OnWindowLoaded(object sender, RoutedEventArgs e)
+        {
+            // Detect and apply system theme after window is fully loaded
+            DetectAndApplySystemTheme();
         }
 
         // Theme Management
+        private void DetectAndApplySystemTheme()
+        {
+            try
+            {
+                // Read Windows 10/11 theme preference
+                using (var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"))
+                {
+                    if (key != null)
+                    {
+                        var appsUseLightTheme = key.GetValue("AppsUseLightTheme");
+                        if (appsUseLightTheme != null)
+                        {
+                            bool isDark = (int)appsUseLightTheme == 0;
+                            ThemeToggle.IsChecked = isDark;
+                            ApplyTheme(isDark);
+                            return;
+                        }
+                    }
+                }
+            }
+            catch
+            {
+                // Fallback to light mode if detection fails
+            }
+
+            // Default to light mode
+            ThemeToggle.IsChecked = false;
+            ApplyTheme(false);
+        }
+
         private void ThemeToggle_Click(object sender, RoutedEventArgs e)
         {
             ApplyTheme(ThemeToggle.IsChecked == true);
