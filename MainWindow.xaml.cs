@@ -200,6 +200,7 @@ namespace STM32Bootloader
             EraseBtn.IsEnabled = connected;
             FlashBtn.IsEnabled = connected && !string.IsNullOrEmpty(_selectedFilePath);
             JumpBtn.IsEnabled = connected;
+            ReadMemoryBtn.IsEnabled = connected;
         }
 
         private void RefreshBtn_Click(object sender, RoutedEventArgs e)
@@ -317,6 +318,114 @@ namespace STM32Bootloader
         {
             _bootloader.Jump();
             AddLog("Jump command sent", Brushes.CornflowerBlue);
+        }
+
+        private void ReadMemoryBtn_Click(object sender, RoutedEventArgs e)
+        {
+            // Open the popup window
+            ReadMemoryPopup.IsOpen = true;
+        }
+
+        private void CloseReadMemoryPopup_Click(object sender, RoutedEventArgs e)
+        {
+            // Close the popup
+            ReadMemoryPopup.IsOpen = false;
+        }
+
+        private async void ReadMemoryExecuteBtn_Click(object sender, RoutedEventArgs e)
+        {
+            // Parse address from hex string
+            uint address;
+            try
+            {
+                string addrText = ReadAddressBox.Text.Trim();
+                if (addrText.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+                    addrText = addrText.Substring(2);
+                
+                address = Convert.ToUInt32(addrText, 16);
+            }
+            catch
+            {
+                AddLog("Invalid address format. Use hex format (e.g., 0x08008000)", Brushes.Red);
+                return;
+            }
+
+            // Get length from ComboBox
+            if (ReadLengthBox.SelectedItem is not ComboBoxItem lengthItem)
+                return;
+            
+            int length = int.Parse(lengthItem.Content.ToString());
+
+            // Disable button during read
+            ReadMemoryExecuteBtn.IsEnabled = false;
+            ReadMemoryOutput.Text = "Reading...";
+
+            // Pause monitor during read
+            var wasMonitoring = _monitorRunning;
+            if (wasMonitoring) StopMonitor();
+
+            try
+            {
+                AddLog($"Reading {length} bytes from 0x{address:X8}...", Brushes.CornflowerBlue);
+                
+                var data = await _bootloader.ReadMemoryAsync(address, length);
+                
+                if (data != null && data.Length == length)
+                {
+                    // Format as hex dump
+                    var hexDump = FormatHexDump(address, data);
+                    ReadMemoryOutput.Text = hexDump;
+                    AddLog($"Read complete: {length} bytes", Brushes.Green);
+                }
+                else
+                {
+                    ReadMemoryOutput.Text = "Read failed or timeout";
+                    AddLog("Read failed", Brushes.Red);
+                }
+            }
+            finally
+            {
+                // Resume monitor
+                if (wasMonitoring) StartMonitor();
+                
+                ReadMemoryExecuteBtn.IsEnabled = true;
+            }
+        }
+
+        private string FormatHexDump(uint baseAddress, byte[] data)
+        {
+            var sb = new System.Text.StringBuilder();
+            
+            for (int i = 0; i < data.Length; i += 16)
+            {
+                // Address column
+                sb.Append($"{baseAddress + i:X8}:  ");
+                
+                // Hex bytes (16 per line, with space every 8 bytes)
+                for (int j = 0; j < 16; j++)
+                {
+                    if (i + j < data.Length)
+                        sb.Append($"{data[i + j]:X2} ");
+                    else
+                        sb.Append("   ");
+                    
+                    if (j == 7) sb.Append(" ");
+                }
+                
+                sb.Append(" ");
+                
+                // ASCII representation
+                for (int j = 0; j < 16 && i + j < data.Length; j++)
+                {
+                    byte b = data[i + j];
+                    char c = (b >= 32 && b <= 126) ? (char)b : '.';
+                    sb.Append(c);
+                }
+                
+                sb.AppendLine();
+            }
+            
+            return sb.ToString();
         }
 
         private DateTime _writeStartTime;

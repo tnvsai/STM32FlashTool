@@ -330,7 +330,7 @@ namespace STM32Bootloader.Services
                     if (resp.Length == 0 || resp[0] != ACK)
                         return null;
 
-                    // Send address (little-endian)
+                    // Send address (little-endian) byte-by-byte
                     var addrBytes = BitConverter.GetBytes(address);
                     foreach (var b in addrBytes)
                     {
@@ -348,9 +348,9 @@ namespace STM32Bootloader.Services
                     if (resp.Length == 0 || resp[0] != ACK)
                         return null;
 
-                    // Read data (reversed for little-endian display)
+                    // Read data (no reversal - raw bytes from device)
                     var data = ReadBytes(length);
-                    return data.Length == length ? data.Reverse().ToArray() : null;
+                    return data.Length == length ? data : null;
                 }
                 catch
                 {
