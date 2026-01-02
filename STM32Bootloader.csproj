@@ -26,4 +26,8 @@
     <PackageReference Include="System.IO.Ports" Version="8.0.0" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Resource Include="logo.ico" />
+  </ItemGroup>
+
 </Project>

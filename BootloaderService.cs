@@ -77,11 +77,13 @@ namespace STM32Bootloader.Services
 
         public bool IsConnected => _port?.IsOpen == true;
 
-        private byte? ReadOneByte()
+        private byte? ReadOneByte(int timeout = 1000)
         {
             if (_port == null) return null;
 
-            while (true)
+            var startTime = DateTime.Now;
+
+            while ((DateTime.Now - startTime).TotalMilliseconds < timeout)
             {
                 if (_rxBuffer.Count > 0)
                 {
@@ -90,67 +92,74 @@ namespace STM32Bootloader.Services
                     return b;
                 }
 
-                var available = _port.BytesToRead;
-                if (available > 0)
+                try 
                 {
-                    var buffer = new byte[1];
-                    _port.Read(buffer, 0, 1);
-                    
-                if (buffer[0] == 0x5B) // '['
-                {
-                    // Attempt to read "LOG] " (5 bytes) with a small timeout
-                    var prefixBuffer = new List<byte>();
-                    var prefixStart = DateTime.Now;
-                    
-                    while (prefixBuffer.Count < 5 && (DateTime.Now - prefixStart).TotalMilliseconds < 50)
+                    var available = _port.BytesToRead;
+                    if (available > 0)
                     {
-                        if (_port.BytesToRead > 0)
+                        var buffer = new byte[1];
+                        _port.Read(buffer, 0, 1);
+                        
+                        if (buffer[0] == 0x5B) // '['
                         {
-                            var b = new byte[1];
-                            _port.Read(b, 0, 1);
-                            prefixBuffer.Add(b[0]);
+                            // Attempt to read "LOG] " (5 bytes) with a small timeout
+                            var prefixBuffer = new List<byte>();
+                            var prefixStart = DateTime.Now;
+                            
+                            while (prefixBuffer.Count < 5 && (DateTime.Now - prefixStart).TotalMilliseconds < 50)
+                            {
+                                if (_port.BytesToRead > 0)
+                                {
+                                    var b = new byte[1];
+                                    _port.Read(b, 0, 1);
+                                    prefixBuffer.Add(b[0]);
+                                }
+                                else
+                                {
+                                    Thread.Sleep(1);
+                                }
+                            }
+
+                            if (prefixBuffer.Count == 5 && System.Text.Encoding.ASCII.GetString(prefixBuffer.ToArray()) == "LOG] ")
+                            {
+                                // It is a log! Read the rest of the line
+                                try 
+                                {
+                                    var line = _port.ReadLine();
+                                    LogReceived?.Invoke(this, line.Trim());
+                                    continue; // Loop back to get next byte
+                                }
+                                catch
+                                {
+                                    continue;
+                                }
+                            }
+                            else
+                            {
+                                // Not a log. Push everything we read into the buffer
+                                _rxBuffer.Add(buffer[0]);
+                                _rxBuffer.AddRange(prefixBuffer);
+                                
+                                var b = _rxBuffer[0];
+                                _rxBuffer.RemoveAt(0);
+                                return b;
+                            }
                         }
                         else
                         {
-                            Thread.Sleep(1);
+                            return buffer[0];
                         }
-                    }
-
-                    if (prefixBuffer.Count == 5 && System.Text.Encoding.ASCII.GetString(prefixBuffer.ToArray()) == "LOG] ")
-                    {
-                        // It is a log! Read the rest of the line
-                        try 
-                        {
-                            var line = _port.ReadLine();
-                            LogReceived?.Invoke(this, line.Trim());
-                            continue; // Loop back to get next byte
-                        }
-                        catch
-                        {
-                            // ReadLine timed out? Just continue.
-                            continue;
-                        }
-                    }
-                    else
-                    {
-                        // Not a log. Push everything we read into the buffer
-                        _rxBuffer.Add(buffer[0]);
-                        _rxBuffer.AddRange(prefixBuffer);
-                        
-                        var b = _rxBuffer[0];
-                        _rxBuffer.RemoveAt(0);
-                        return b;
                     }
                 }
-                else
+                catch
                 {
-                    return buffer[0];
-                }
+                    // Ignore port errors during read attempt
                 }
 
-                // Timeout check
-                Thread.Sleep(10);
+                Thread.Sleep(5);
             }
+
+            return null; // Timeout
         }
 
         private byte[] ReadBytes(int count, int timeout = 1000)
@@ -160,9 +169,12 @@ namespace STM32Bootloader.Services
 
             while (result.Count < count)
             {
-                var b = ReadOneByte();
-                if (b == null || (DateTime.Now - startTime).TotalMilliseconds > timeout)
-                    break;
+                var remaining = timeout - (int)(DateTime.Now - startTime).TotalMilliseconds;
+                if (remaining <= 0) break;
+
+                var b = ReadOneByte(remaining);
+                if (b == null) break;
+                
                 result.Add(b.Value);
             }
 
@@ -238,13 +250,9 @@ namespace STM32Bootloader.Services
                                     continue;
                                 }
 
-                                // Send address (little-endian) - byte by byte
+                                // Send address (little-endian)
                                 var addrBytes = BitConverter.GetBytes(addr);
-                                foreach (var b in addrBytes)
-                                {
-                                    _port.Write(new byte[] { b }, 0, 1);
-                                    Thread.Sleep(BYTE_TX_DELAY);
-                                }
+                                _port.Write(addrBytes, 0, addrBytes.Length);
 
                                 resp = ReadBytes(1);
                                 if (resp.Length == 0 || resp[0] != ACK)
@@ -263,12 +271,12 @@ namespace STM32Bootloader.Services
                                 }
 
                                 // Send data - byte by byte
-                                // Send data - Tight Loop (Natural Throttling)
-                                // Writing byte-by-byte without sleep uses C# method overhead 
-                                // to naturally pace the data (~10-50us), matching UART speed.
+                                // Restored paced writing to prevent buffer overflow on device
                                 foreach (var b in chunk)
                                 {
                                     _port.Write(new byte[] { b }, 0, 1);
+                                    // No explicit sleep needed if loop overhead is enough, 
+                                    // but we check for ACK at the end.
                                 }
 
                                 resp = ReadBytes(1, WRITE_TIMEOUT);
@@ -291,7 +299,9 @@ namespace STM32Bootloader.Services
 
                         totalWritten += chunk.Length;
                         ProgressChanged?.Invoke(this, (totalWritten, totalLen));
-                        Thread.Sleep(CHUNK_DELAY);
+                        
+                        // Small delay to allow device to process
+                        if (CHUNK_DELAY > 0) Thread.Sleep(CHUNK_DELAY);
                     }
 
                     return true;

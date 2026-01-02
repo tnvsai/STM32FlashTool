@@ -8,6 +8,7 @@ using System.Windows.Documents;
 using System.Windows.Media;
 using Microsoft.Win32;
 using STM32Bootloader.Services;
+using System.Linq;
 
 namespace STM32Bootloader
 {
@@ -28,23 +29,82 @@ namespace STM32Bootloader
             
             // Load saved settings
             _settings = AppSettings.Load();
-            LoadSettings();
             
             RefreshPorts();
+            LoadSettings(); // Call LoadSettings AFTER RefreshPorts to restore selection
             
             Closed += (s, e) => SaveSettings();
         }
 
+        // Theme Management
+        private void ThemeToggle_Click(object sender, RoutedEventArgs e)
+        {
+            ApplyTheme(ThemeToggle.IsChecked == true);
+        }
+
+        private void ApplyTheme(bool isDark)
+        {
+            // Helper to set color in Window Resources
+            void SetColor(string key, string hex) => this.Resources[key] = new SolidColorBrush((Color)ColorConverter.ConvertFromString(hex));
+
+            if (isDark)
+            {
+                SetColor("AppBackgroundBrush", "#121212");
+                SetColor("CardBackgroundBrush", "#1E1E1E");
+                SetColor("TextPrimaryBrush", "#FFFFFF");
+                SetColor("TextSecondaryBrush", "#B0B0B0");
+                SetColor("BorderBrush", "#333333");
+                SetColor("HeaderBackgroundBrush", "#202020");
+                SetColor("ControlBackgroundBrush", "#2D2D2D");
+                SetColor("ControlBorderBrush", "#444444");
+            }
+            else
+            {
+                SetColor("AppBackgroundBrush", "#F3F3F3");
+                SetColor("CardBackgroundBrush", "#FFFFFF");
+                SetColor("TextPrimaryBrush", "#333333");
+                SetColor("TextSecondaryBrush", "#666666");
+                SetColor("BorderBrush", "#E0E0E0");
+                SetColor("HeaderBackgroundBrush", "#005A9E");
+                SetColor("ControlBackgroundBrush", "#FFFFFF");
+                SetColor("ControlBorderBrush", "#D0D0D0");
+            }
+
+            // Apply DWM Dark Mode to Title Bar
+            try 
+            {
+                var windowInteropHelper = new System.Windows.Interop.WindowInteropHelper(this);
+                int useDarkMode = isDark ? 1 : 0;
+                DwmSetWindowAttribute(windowInteropHelper.Handle, DWMWA_USE_IMMERSIVE_DARK_MODE, ref useDarkMode, sizeof(int));
+            }
+            catch { /* Ignore on older OS */ }
+        }
+
+        // DWM API for Dark Title Bar
+        [System.Runtime.InteropServices.DllImport("dwmapi.dll", PreserveSig = true)]
+        public static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int attrValue, int attrSize);
+        private const int DWMWA_USE_IMMERSIVE_DARK_MODE = 20;
+
         private void RefreshPorts()
         {
+            var currentSelection = PortComboBox.SelectedItem as string;
+            
             PortComboBox.Items.Clear();
             var ports = _bootloader.GetAvailablePorts();
             foreach (var port in ports)
             {
                 PortComboBox.Items.Add(port);
             }
-            if (ports.Count > 0)
+
+            // Try to restore previous selection, or select first available
+            if (!string.IsNullOrEmpty(currentSelection) && ports.Contains(currentSelection))
+            {
+                PortComboBox.SelectedItem = currentSelection;
+            }
+            else if (ports.Count > 0)
+            {
                 PortComboBox.SelectedIndex = 0;
+            }
             
             AddLog($"Found {ports.Count} port(s)");
         }
@@ -72,7 +132,7 @@ namespace STM32Bootloader
 
                 if (_bootloader.Connect(port, baudRate))
                 {
-                    AddLog($"Connected to {port} @ {baudRate} baud", Brushes.Blue);
+                    AddLog($"Connected to {port} @ {baudRate} baud", Brushes.CornflowerBlue);
                     StartMonitor(); // Auto-start monitor
                     UpdateUI();
                 }
@@ -89,8 +149,10 @@ namespace STM32Bootloader
             
             ConnectBtn.Content = connected ? "Disconnect" : "Connect";
             StatusText.Text = connected ? "Connected" : "Disconnected";
-            StatusText.Foreground = connected ? System.Windows.Media.Brushes.Green : System.Windows.Media.Brushes.Red;
-            
+            StatusText.Foreground = connected ? System.Windows.Media.Brushes.LightGreen : (Brush)FindResource("TextSecondaryBrush");
+            // Change status dot color safely (if needed, access via XAML name if exposing property or logic)
+            if (StatusDot != null) StatusDot.Fill = connected ? System.Windows.Media.Brushes.LimeGreen : System.Windows.Media.Brushes.Silver;
+
             if (!connected)
             {
                 StopMonitor();
@@ -120,7 +182,7 @@ namespace STM32Bootloader
             {
                 _selectedFilePath = dialog.FileName;
                 FilePathText.Text = _selectedFilePath;
-                AddLog($"Selected: {Path.GetFileName(_selectedFilePath)}", Brushes.Blue);
+                AddLog($"Selected: {Path.GetFileName(_selectedFilePath)}", Brushes.CornflowerBlue);
                 UpdateUI();
             }
         }
@@ -133,7 +195,7 @@ namespace STM32Bootloader
             var wasMonitoring = _monitorRunning;
             if (wasMonitoring) StopMonitor();
             
-            AddLog("Erasing...", Brushes.Blue);
+            AddLog("Erasing...", Brushes.CornflowerBlue);
             
             var success = await _bootloader.EraseAsync();
             if (success)
@@ -165,7 +227,7 @@ namespace STM32Bootloader
             try
             {
                 // Erase
-                AddLog("Step 1/3: Erasing...", Brushes.Blue);
+                AddLog("Step 1/3: Erasing...", Brushes.CornflowerBlue);
                 var eraseStart = DateTime.Now;
                 if (!await _bootloader.EraseAsync())
                 {
@@ -176,7 +238,7 @@ namespace STM32Bootloader
                 AddLog($"Erase complete ({eraseTime:F2}s)", Brushes.Green);
 
                 // Write
-                AddLog("Step 2/3: Writing firmware...", Brushes.Blue);
+                AddLog("Step 2/3: Writing firmware...", Brushes.CornflowerBlue);
                 var data = await File.ReadAllBytesAsync(_selectedFilePath);
                 _writeStartTime = DateTime.Now; // Initialize for progress bar
                 var writeStart = DateTime.Now; // Keep for total time calculation below
@@ -192,7 +254,7 @@ namespace STM32Bootloader
                 AddLog($"Write complete ({writeTime:F2}s, {bytesPerSec} bytes/sec)", Brushes.Green);
 
                 // Jump
-                AddLog("Step 3/3: Jump to app...", Brushes.Blue);
+                AddLog("Step 3/3: Jump to app...", Brushes.CornflowerBlue);
                 await Task.Delay(500);
                 _bootloader.Jump();
                 
@@ -217,7 +279,7 @@ namespace STM32Bootloader
         private void JumpBtn_Click(object sender, RoutedEventArgs e)
         {
             _bootloader.Jump();
-            AddLog("Jump command sent", Brushes.Blue);
+            AddLog("Jump command sent", Brushes.CornflowerBlue);
         }
 
         private DateTime _writeStartTime;
@@ -301,7 +363,7 @@ namespace STM32Bootloader
             bool autoScroll = MonitorAutoScroll.IsChecked == true;
             double savedOffset = MonitorScroll.VerticalOffset;
 
-            MonitorText.AppendText(message); // More efficient than +=
+            MonitorText.AppendText(message);
 
             if (autoScroll)
             {
@@ -338,17 +400,19 @@ namespace STM32Bootloader
             LogRichText.Selection.Select(LogRichText.Document.ContentEnd, LogRichText.Document.ContentEnd); // Deselect
         }
 
-
-
         private void AddLog(string message, Brush? color = null)
         {
             Dispatcher.Invoke(() =>
             {
-                color ??= Brushes.Black; // Default color
-                
                 var time = DateTime.Now.ToString("HH:mm:ss");
-                var run = new Run($"[{time}] {message}") { Foreground = color };
-                var paragraph = new Paragraph(run) { Margin = new Thickness(0) }; // Compact spacing
+                var run = new Run($"[{time}] {message}");
+                
+                if (color != null)
+                {
+                    run.Foreground = color;
+                }
+
+                var paragraph = new Paragraph(run) { Margin = new Thickness(0) };
 
                 LogRichText.Document.Blocks.Add(paragraph);
                 
@@ -385,7 +449,7 @@ namespace STM32Bootloader
                 {
                     _selectedFilePath = files[0];
                     FilePathText.Text = _selectedFilePath;
-                    AddLog($"Dropped: {Path.GetFileName(_selectedFilePath)}", Brushes.Blue);
+                    AddLog($"Dropped: {Path.GetFileName(_selectedFilePath)}", Brushes.CornflowerBlue);
                     UpdateUI();
                 }
             }
@@ -399,13 +463,47 @@ namespace STM32Bootloader
             {
                 _selectedFilePath = _settings.LastFilePath;
                 FilePathText.Text = _selectedFilePath;
+                UpdateUI(); // Enable buttons if file valid
+            }
+
+            // Restore Port
+            if (!string.IsNullOrEmpty(_settings.LastPort))
+            {
+                // Check if port exists in list
+                foreach (var item in PortComboBox.Items)
+                {
+                    if (item.ToString() == _settings.LastPort)
+                    {
+                        PortComboBox.SelectedItem = item;
+                        break;
+                    }
+                }
+            }
+
+            // Restore Baud Rate
+            if (_settings.LastBaudRate > 0)
+            {
+                foreach (ComboBoxItem item in BaudComboBox.Items)
+                {
+                    if (int.TryParse(item.Content.ToString(), out int baud) && baud == _settings.LastBaudRate)
+                    {
+                        BaudComboBox.SelectedItem = item;
+                        break;
+                    }
+                }
             }
         }
 
         private void SaveSettings()
         {
+            // Save if connected or just UI state
             _settings.LastPort = PortComboBox.SelectedItem as string;
-            _settings.LastBaudRate = int.TryParse((BaudComboBox.SelectedItem as ComboBoxItem)?.Content?.ToString(), out int baud) ? baud : 115200;
+            
+            if (BaudComboBox.SelectedItem is ComboBoxItem baudItem && int.TryParse(baudItem.Content.ToString(), out int baud))
+            {
+                _settings.LastBaudRate = baud;
+            }
+            
             _settings.LastFilePath = _selectedFilePath;
             _settings.Save();
         }
