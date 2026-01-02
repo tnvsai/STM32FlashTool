@@ -1,0 +1,43 @@
+# OS
+.DS_Store
+Thumbs.db
+*.swp
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# .NET / Visual Studio
+.vs/
+bin/
+obj/
+*.user
+*.suo
+*.launch
+*.pdb
+
+# C / Embedded / Make
+build/
+*.o
+*.d
+*.elf
+*.bin
+*.hex
+*.map
+*.lst
+
+# Python
+__pycache__/
+*.pyc
+venv/
+env/
+.env
+
+# Node.js
+node_modules/
+dist/
+
+# Artifacts & Temp
+*.zip
+*.log
+.gemini/
