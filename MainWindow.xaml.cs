@@ -18,6 +18,9 @@ namespace STM32Bootloader
         private string? _selectedFilePath;
         private Thread? _monitorThread;
         private bool _monitorRunning = false;
+        private Thread? _healthCheckThread;
+        private bool _healthCheckRunning = false;
+        private string? _connectedPort = null;
         private AppSettings _settings;
 
         public MainWindow()
@@ -151,6 +154,7 @@ namespace STM32Bootloader
             if (_bootloader.IsConnected)
             {
                 _bootloader.Disconnect();
+                StopHealthCheck();
                 AddLog("Disconnected");
                 UpdateUI();
             }
@@ -169,8 +173,10 @@ namespace STM32Bootloader
 
                 if (_bootloader.Connect(port, baudRate))
                 {
+                    _connectedPort = port;
                     AddLog($"Connected to {port} @ {baudRate} baud", Brushes.CornflowerBlue);
                     StartMonitor(); // Auto-start monitor
+                    StartHealthCheck(); // Start health monitoring
                     UpdateUI();
                 }
                 else
@@ -193,13 +199,21 @@ namespace STM32Bootloader
             if (!connected)
             {
                 StopMonitor();
+                StopHealthCheck();
             }
             
             PortComboBox.IsEnabled = !connected;
             BaudComboBox.IsEnabled = !connected;
             EraseBtn.IsEnabled = connected;
             FlashBtn.IsEnabled = connected && !string.IsNullOrEmpty(_selectedFilePath);
-            JumpBtn.IsEnabled = connected;
+            JumpComboBox.IsEnabled = connected;
+            
+            // Set default selection when connecting
+            if (connected && JumpComboBox.SelectedIndex == -1)
+            {
+                JumpComboBox.SelectedIndex = 0; // Default to "Jump to Application"
+            }
+            
             ReadMemoryBtn.IsEnabled = connected;
         }
 
@@ -239,12 +253,21 @@ namespace STM32Bootloader
             if (success)
                 AddLog("Erase complete", Brushes.Green);
             else
+            {
                 AddLog("Erase failed", Brushes.Red);
+                
+                // Check if still connected - if not, update UI
+                if (!_bootloader.IsConnected)
+                {
+                    AddLog("Device disconnected", Brushes.Red);
+                    UpdateUI();
+                }
+            }
             
             // Resume monitor
             if (wasMonitoring) StartMonitor();
             
-            EraseBtn.IsEnabled = true;
+            EraseBtn.IsEnabled = _bootloader.IsConnected;
         }
 
         private async void FlashBtn_Click(object sender, RoutedEventArgs e)
@@ -254,7 +277,7 @@ namespace STM32Bootloader
 
             EraseBtn.IsEnabled = false;
             FlashBtn.IsEnabled = false;
-            JumpBtn.IsEnabled = false;
+            JumpComboBox.IsEnabled = false;
             
             // Pause monitor during flash
             var wasMonitoring = _monitorRunning;
@@ -310,14 +333,33 @@ namespace STM32Bootloader
                 
                 EraseBtn.IsEnabled = true;
                 FlashBtn.IsEnabled = true;
-                JumpBtn.IsEnabled = true;
+                JumpComboBox.IsEnabled = true;
             }
         }
 
-        private void JumpBtn_Click(object sender, RoutedEventArgs e)
+        private void JumpComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
-            _bootloader.Jump();
-            AddLog("Jump command sent", Brushes.CornflowerBlue);
+            if (JumpComboBox.SelectedIndex == -1)
+                return;
+
+            var selectedItem = JumpComboBox.SelectedItem as ComboBoxItem;
+            if (selectedItem == null)
+                return;
+
+            string selection = selectedItem.Content.ToString();
+
+            if (selection == "Jump to Application")
+            {
+                _bootloader.Jump();
+                AddLog("Jump to Application command sent (0x55)", Brushes.CornflowerBlue);
+            }
+            else if (selection == "Jump to Bootloader")
+            {
+                _bootloader.JumpToBootloader();
+                AddLog("Jump to Bootloader command sent (0x54)", Brushes.CornflowerBlue);
+            }
+
+            // Keep selection visible to show current state
         }
 
         private void ReadMemoryBtn_Click(object sender, RoutedEventArgs e)
@@ -478,8 +520,15 @@ namespace STM32Bootloader
                         }
                         Thread.Sleep(10);
                     }
-                    catch
+                    catch (Exception ex)
                     {
+                        // Device likely disconnected
+                        Dispatcher.BeginInvoke(() =>
+                        {
+                            _bootloader.Disconnect();
+                            AddLog("Connection failed", Brushes.Red);
+                            UpdateUI();
+                        });
                         break;
                     }
                 }
@@ -495,8 +544,91 @@ namespace STM32Bootloader
             if (!_monitorRunning) return;
             
             _monitorRunning = false;
-            _monitorThread?.Join(1000);
+            
+            // Only join if we are NOT on the monitor thread logic
+            if (_monitorThread != null && _monitorThread != Thread.CurrentThread)
+            {
+                _monitorThread.Join(1000);
+            }
             AddLog("Monitor stopped");
+        }
+
+        private void StartHealthCheck()
+        {
+            if (_healthCheckRunning) return;
+            
+            _healthCheckRunning = true;
+            AddLog("Health check started", Brushes.Gray);
+            
+            _healthCheckThread = new Thread(() =>
+            {
+                while (_healthCheckRunning && _bootloader.IsConnected)
+                {
+                    try
+                    {
+                        // Check if the port still exists in system
+                        var availablePorts = System.IO.Ports.SerialPort.GetPortNames();
+                        
+                        if (!string.IsNullOrEmpty(_connectedPort) && !availablePorts.Contains(_connectedPort))
+                        {
+                            // Port no longer exists - device disconnected
+                            Dispatcher.BeginInvoke(() =>
+                            {
+                                _bootloader.Disconnect();
+                                AddLog("Device disconnected", Brushes.Red);
+                                UpdateUI();
+                                _healthCheckRunning = false;
+                            });
+                            break;
+                        }
+                        
+                        Thread.Sleep(500); // Check every 500ms
+                    }
+                    catch (Exception ex)
+                    {
+                        Dispatcher.BeginInvoke(() => AddLog($"Health check error: {ex.Message}", Brushes.Orange));
+                        break;
+                    }
+                }
+                
+                // Check if loop exited unexpectedly (while still supposed to be running)
+                if (_healthCheckRunning)
+                {
+                    Dispatcher.BeginInvoke(() =>
+                    {
+                        if (_healthCheckRunning) // Double check on UI thread
+                        {
+                            _bootloader.Disconnect();
+                            AddLog("Device disconnected", Brushes.Red);
+                            UpdateUI();
+                            _healthCheckRunning = false;
+                        }
+                        AddLog("Health check stopped", Brushes.Gray);
+                    });
+                }
+                else
+                {
+                    Dispatcher.BeginInvoke(() => AddLog("Health check stopped", Brushes.Gray));
+                }
+            })
+            {
+                IsBackground = true
+            };
+            _healthCheckThread.Start();
+        }
+
+        private void StopHealthCheck()
+        {
+            if (!_healthCheckRunning) return;
+            
+            _healthCheckRunning = false;
+            
+            // Avoid deadlock if called from within the thread
+            if (_healthCheckThread != null && _healthCheckThread != Thread.CurrentThread)
+            {
+                _healthCheckThread.Join(1000);
+            }
+            _connectedPort = null;
         }
 
         private void OnLogReceived(object? sender, string message)

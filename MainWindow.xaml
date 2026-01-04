@@ -410,7 +410,10 @@
 
                             <Button Grid.Column="0" x:Name="EraseBtn" Content="Erase" Height="40" Style="{StaticResource ModernButton}" Click="EraseBtn_Click" IsEnabled="False"/>
                             <Button Grid.Column="2" x:Name="FlashBtn" Content="⚡ Flash Firmware" Height="40" Style="{StaticResource PrimaryButton}" Click="FlashBtn_Click" IsEnabled="False" FontSize="14"/>
-                            <Button Grid.Column="4" x:Name="JumpBtn" Content="Jump" Height="40" Style="{StaticResource ModernButton}" Click="JumpBtn_Click" IsEnabled="False"/>
+                            <ComboBox Grid.Column="4" x:Name="JumpComboBox" Height="40" VerticalContentAlignment="Center" SelectionChanged="JumpComboBox_SelectionChanged" IsEnabled="False">
+                                <ComboBoxItem Content="Jump to Application"/>
+                                <ComboBoxItem Content="Jump to Bootloader"/>
+                            </ComboBox>
                             <Button Grid.Column="6" x:Name="ReadMemoryBtn" Content="Read Memory" Height="40" Style="{StaticResource ModernButton}" Click="ReadMemoryBtn_Click" IsEnabled="False"/>
                         </Grid>
                     </Grid>

@@ -10,7 +10,8 @@ namespace STM32Bootloader.Services
     public class BootloaderService
     {
         // Commands  
-        private const byte CMD_GO = 0x55;
+        private const byte CMD_GO = 0x55; // Jump to Application
+        private const byte CMD_JUMP_TO_BOOTLOADER = 0x54; // Jump to Bootloader
         private const byte CMD_ERASE_APP = 0x56;
         private const byte CMD_WRITE_MEM = 0x57;
         private const byte CMD_READ_MEM = 0x59;
@@ -198,8 +199,20 @@ namespace STM32Bootloader.Services
                     var resp = ReadBytes(1, ERASE_TIMEOUT);
                     return resp.Length > 0 && resp[0] == ACK;
                 }
-                catch
+                catch (Exception ex)
                 {
+                    // Port disconnected or communication error
+                    try
+                    {
+                        if (_port?.IsOpen == true)
+                        {
+                            _port.Close();
+                            _port.Dispose();
+                        }
+                    }
+                    catch { }
+                    
+                    _port = null;
                     return false;
                 }
             });
@@ -367,6 +380,14 @@ namespace STM32Bootloader.Services
             }
         }
 
+        public void JumpToBootloader()
+        {
+            if (_port != null && _port.IsOpen)
+            {
+                _port.Write(new byte[] { CMD_JUMP_TO_BOOTLOADER }, 0, 1);
+            }
+        }
+
         public string? ReadAvailableData()
         {
             if (_port == null || !_port.IsOpen)
@@ -382,9 +403,21 @@ namespace STM32Bootloader.Services
                     return System.Text.Encoding.UTF8.GetString(buffer);
                 }
             }
-            catch
+            catch (Exception ex)
             {
-                // Ignore errors
+                // Port has been disconnected, close it properly
+                try
+                {
+                    if (_port?.IsOpen == true)
+                    {
+                        _port.Close();
+                        _port.Dispose();
+                    }
+                }
+                catch { }
+                
+                _port = null;
+                throw; // Re-throw to notify caller
             }
 
             return null;
